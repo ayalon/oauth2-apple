@@ -4,9 +4,11 @@ namespace League\OAuth2\Client\Provider;
 
 use Exception;
 use InvalidArgumentException;
-use Lcobucci\JWT\Builder;
-use Lcobucci\JWT\Signer\Ecdsa\Sha256;
-use Lcobucci\JWT\Signer\Key;
+use Jose\Component\Core\AlgorithmManager;
+use Jose\Component\KeyManagement\JWKFactory;
+use Jose\Component\Signature\Algorithm\ES256;
+use Jose\Component\Signature\JWSBuilder;
+use Jose\Component\Signature\Serializer\CompactSerializer;
 use League\OAuth2\Client\Grant\AbstractGrant;
 use League\OAuth2\Client\Provider\Exception\AppleAccessDeniedException;
 use League\OAuth2\Client\Token\AccessToken;
@@ -208,32 +210,33 @@ class Apple extends AbstractProvider
      */
     public function getAccessToken($grant, array $options = [])
     {
-        $signer = new Sha256();
-        $time = time();
+        $algorithmManager = new AlgorithmManager([new ES256()]);
+        $jwsBuilder = new JWSBuilder(null, $algorithmManager);
 
-        $token = (new Builder())
-            ->issuedBy($this->teamId)
-            ->permittedFor('https://appleid.apple.com')
-            ->issuedAt($time)
-            ->expiresAt($time + 600)
-            ->relatedTo($this->clientId)
-            ->withClaim('sub', $this->clientId)
-            ->withHeader('alg', 'ES256')
-            ->withHeader('kid', $this->keyFileId)
-            ->getToken($signer, $this->getLocalKey());
+
+        $jws = $jwsBuilder
+            ->create()
+            ->withPayload(json_encode([
+                'iat' => time(),
+                'exp' => time() + 600,
+                'iss' => $this->teamId,
+                'aud' => 'https://appleid.apple.com',
+                'sub' => $this->clientId
+            ]))
+            ->addSignature(JWKFactory::createFromKeyFile($this->keyFilePath), [
+                'alg' => 'ES256',
+                'kid' => $this->keyFileId
+            ])
+            ->build();
+
+        $serializer = new CompactSerializer();
+        $token = $serializer->serialize($jws, 0);
 
         $options += [
-            'client_secret' => (string) $token
+            'client_secret' => $token
         ];
 
         return parent::getAccessToken($grant, $options);
     }
 
-    /**
-     * @return Key
-     */
-    public function getLocalKey()
-    {
-        return new Key('file://' . $this->keyFilePath);
-    }
 }
